@@ -1,0 +1,20 @@
+%% -*- erlang -*-
+
+%%
+%% If we have a X_COMP_REBAR_CONFIG_MASTER_SCRIPT environment variable, script that file.
+%% This variable normally points to a master build system's central rebar.config.script
+%% that sets up the environment for the local module build
+%%
+case os:getenv("X_COMP_REBAR_CONFIG_MASTER_SCRIPT") of
+    false ->
+        CONFIG;
+
+    Script ->
+        case file:script(Script, [ { 'CONFIG', CONFIG }, { 'SCRIPT', SCRIPT } ] ) of
+            { ok, Value } -> Value;
+
+            { error, Reason } -> 
+                io:format("Failed to evaluate ~s: ~p\n", [ Script, Reason ] ),
+                CONFIG
+        end
+end.
