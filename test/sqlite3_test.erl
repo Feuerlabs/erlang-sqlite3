@@ -50,7 +50,9 @@ all_test_() ->
       ?FuncTest(large_number),
       ?FuncTest(unicode),
       ?FuncTest(acc_string_encoding),
-      ?FuncTest(large_offset)]}.
+      ?FuncTest(large_offset),
+      ?FuncTest(issue13),
+      ?FuncTest(enable_load_extension)]}.
 
 open_db() ->
     sqlite3:open(ct, [in_memory]).
@@ -71,8 +73,8 @@ basic_functionality() ->
     TableInfo1 = lists:keyreplace(age, 1, TableInfo, {age, integer, [not_null]}),
     drop_all_tables(ct),
     ?WARN_ERROR_MESSAGE,
-    ?assertEqual(
-        {error, 21, "empty statement"},
+    ?assertMatch(
+        {error, 21, _},
         sqlite3:sql_exec(ct, "-- Comment")),
     ?assertEqual(
         [], 
@@ -91,8 +93,8 @@ basic_functionality() ->
         {rowid, 2}, 
         sqlite3:write(ct, user, [{name, "marge"}, {age, 30}, {wage, 2000}])),
     ?WARN_ERROR_MESSAGE,
-    ?assertEqual(
-        {error, 19, "constraint failed"}, 
+    ?assertMatch(
+        {error, 19, _}, 
         sqlite3:write(ct, user, [{name, "marge"}, {age, 30}, {wage, 2000}])),
     ?assertEqual(
         [{columns, Columns}, {rows, AllRows}], 
@@ -280,6 +282,13 @@ script_test() ->
     ?assertEqual(
         [{columns,["id"]},{rows,[{1},{2}]}], 
         sqlite3:read_all(script, person)),
+	Script2 = "select * from person; update person set id=3 where id=2",
+    ?assertEqual(
+        [[{columns,["id"]},{rows,[{1},{2}]}], ok], 
+        sqlite3:sql_exec_script(script, Script2)),
+    ?assertEqual(
+        [{columns,["id"]},{rows,[{1},{3}]}], 
+        sqlite3:read_all(script, person)),
     BadScript = string:join(
                  ["CREATE TABLE person2(",
                   "id INTEGER",
@@ -299,9 +308,27 @@ script_test() ->
 large_offset() ->
 	drop_table_if_exists(ct, large_offset),
 	ok = sqlite3:create_table(ct, large_offset, [{id, integer}]),
-	?assertEqual(
-	    [{columns, ["id"]}, {rows, []}, {error, 20, "datatype mismatch"}],
+	?assertMatch(
+	    [{columns, ["id"]}, {rows, []}, {error, 20, _}],
 	    sqlite3:sql_exec(ct, "select * from large_offset limit 1 offset 9223372036854775808")).
+
+issue13() ->
+	drop_table_if_exists(ct, issue13),
+	ok = sqlite3:create_table(ct, issue13, [{foo, integer}]),
+	sqlite3:write_many(ct, issue13, 
+					   [[{foo, X}] || X <- [-1, 0, 127, 128, 255, 256]]),
+	?assertEqual(
+		[{columns, ["foo"]}, {rows, [{255}, {256}]}],
+		sqlite3:sql_exec(ct, "select foo from issue13 where foo > 128;")),
+	?assertEqual(
+		[{columns, ["foo"]}, {rows, [{255}, {256}]}],
+		sqlite3:sql_exec(ct, "select foo from issue13 where foo > ?;", [128.0])),
+	?assertEqual(
+		[{columns, ["foo"]}, {rows, [{255}, {256}]}],
+		sqlite3:sql_exec(ct, "select foo from issue13 where foo > ?;", [128])).
+
+enable_load_extension() ->
+    ?assertEqual(ok, sqlite3:enable_load_extension(ct, 1)).
 
 % create, read, update, delete
 %%====================================================================

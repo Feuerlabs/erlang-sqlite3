@@ -181,6 +181,9 @@ static int control(
   case CMD_SQL_EXEC_SCRIPT:
     sql_exec_script(driver_data, buf, len);
     break;
+  case CMD_ENABLE_LOAD_EXTENSION:
+    enable_load_extension(driver_data, buf, len);
+    break;
   default:
     unknown(driver_data, buf, len);
   }
@@ -241,6 +244,14 @@ static inline int output_ok(sqlite3_drv_t *drv) {
       ERL_DRV_TUPLE, 2
   };
   return driver_output_term(drv->port, spec, sizeof(spec) / sizeof(spec[0]));
+}
+
+static int enable_load_extension(sqlite3_drv_t* drv, char *buf,
+    int len) {
+  char enable = buf[0];
+  sqlite3_enable_load_extension(drv->db, (int) enable);
+  output_ok(drv);
+  return 0;
 }
 
 static inline async_sqlite3_command *make_async_command_statement(
@@ -413,7 +424,7 @@ static int bind_parameters(
     acc_string = driver_alloc(sizeof(char*) * (*p_size + 1));
     ei_decode_string(buffer, p_index, acc_string);
     for (param_index = 1; param_index <= *p_size; param_index++) {
-      sqlite3_bind_int(statement, param_index, (int) acc_string[param_index - 1]);
+      sqlite3_bind_int(statement, param_index, (int) (unsigned char) acc_string[param_index - 1]);
     }
     driver_free(acc_string);
     return 0;
@@ -496,7 +507,7 @@ static int bind_parameters(
 
 static void get_columns(
     sqlite3_drv_t *drv, sqlite3_stmt *statement, int column_count, int base,
-    int *p_term_count, int *p_term_allocated, ErlDrvTermData **p_dataset) {
+    int *p_term_count, int *p_term_allocated, ptr_list** p_ptrs, ErlDrvTermData **p_dataset) {
   int i;
 
   *p_term_count += column_count * 3 + 3;
@@ -505,12 +516,16 @@ static void get_columns(
     *p_dataset = driver_realloc(*p_dataset, sizeof(ErlDrvTermData) * *p_term_allocated);
   }
   for (i = 0; i < column_count; i++) {
-    char *column_name = (char *) sqlite3_column_name(statement, i);
-    TRACE((drv->log, "Column: %s\n", column_name));
+    const char *column_name = sqlite3_column_name(statement, i);
+    size_t column_name_length = strlen(column_name);
+    char *column_name_copy = driver_alloc(sizeof(char *) * (column_name_length + 1));
+    strcpy(column_name_copy, column_name);
+    *p_ptrs = add_to_ptr_list(*p_ptrs, column_name_copy);
+    TRACE((drv->log, "Column: %s\n", column_name_copy));
 
     (*p_dataset)[base + (i * 3)] = ERL_DRV_STRING;
-    (*p_dataset)[base + (i * 3) + 1] = (ErlDrvTermData) column_name;
-    (*p_dataset)[base + (i * 3) + 2] = strlen(column_name);
+    (*p_dataset)[base + (i * 3) + 1] = (ErlDrvTermData) column_name_copy;
+    (*p_dataset)[base + (i * 3) + 2] = column_name_length;
   }
   (*p_dataset)[base + column_count * 3 + 0] = ERL_DRV_NIL;
   (*p_dataset)[base + column_count * 3 + 1] = ERL_DRV_LIST;
@@ -609,7 +624,7 @@ static int sql_exec_one_statement(
     (*dataset_p)[*term_count_p - 1] = drv->atom_columns;
     base_term_count = *term_count_p;
     get_columns(
-        drv, statement, column_count, base_term_count, term_count_p, term_allocated_p, dataset_p);
+        drv, statement, column_count, base_term_count, term_count_p, term_allocated_p, ptrs_p, dataset_p);
     *term_count_p += 4;
     if (*term_count_p > *term_allocated_p) {
       *term_allocated_p = max(*term_count_p, *term_allocated_p*2);
@@ -1127,6 +1142,7 @@ static int prepared_columns(sqlite3_drv_t *drv, char *buffer, int buffer_size) {
   int index = 0, term_count = 0, term_allocated = 0, column_count;
   sqlite3_stmt *statement;
   ErlDrvTermData *dataset = NULL;
+  ptr_list* ptrs = NULL;
 
   ei_decode_version(buffer, &index, NULL);
   ei_decode_long(buffer, &index, &long_prepared_index);
@@ -1154,11 +1170,13 @@ static int prepared_columns(sqlite3_drv_t *drv, char *buffer, int buffer_size) {
   column_count = sqlite3_column_count(statement);
 
   get_columns(
-      drv, statement, column_count, 2, &term_count, &term_allocated, &dataset);
+      drv, statement, column_count, 2, &term_count, &term_allocated, &ptrs, &dataset);
   dataset[term_count - 2] = ERL_DRV_TUPLE;
   dataset[term_count - 1] = 2;
 
-  return driver_output_term(drv->port, dataset, term_count);
+  driver_output_term(drv->port, dataset, term_count);
+  free_ptr_list(ptrs, driver_free_fun);
+  return 0;
 }
 
 static int prepared_step(sqlite3_drv_t *drv, char *buffer, int buffer_size) {

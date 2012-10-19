@@ -19,6 +19,7 @@
 -export([open/1, open/2]).
 -export([start_link/1, start_link/2]).
 -export([stop/0, close/1, close_timeout/2]).
+-export([enable_load_extension/2]).
 -export([sql_exec/1, sql_exec/2, sql_exec_timeout/3,
          sql_exec_script/2, sql_exec_script_timeout/3,
          sql_exec/3, sql_exec_timeout/4]).
@@ -151,6 +152,9 @@ close_timeout(Db, Timeout) ->
 -spec stop() -> 'ok'.
 stop() ->
     close(?MODULE).
+
+enable_load_extension(Db, Value) ->
+    gen_server:call(Db, {enable_load_extension, Value}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -913,6 +917,10 @@ handle_call({finalize, Ref}, _From, State = #state{port = Port, refs = Refs}) ->
             NewState = State
     end,
     {reply, Reply, NewState};
+handle_call({enable_load_extension, _Value} = Payload, _From, State = #state{port =
+        Port, refs = _Refs}) ->
+    Reply = exec(Port, Payload),
+    {reply, Reply, State};
 handle_call({Cmd, Ref}, _From, State = #state{port = Port, refs = Refs}) ->
     Reply = case dict:find(Ref, Refs) of
                 {ok, Index} ->
@@ -1011,6 +1019,7 @@ get_priv_dir() ->
 -define(PREPARED_FINALIZE, 10).
 -define(PREPARED_COLUMNS, 11).
 -define(SQL_EXEC_SCRIPT, 12).
+-define(ENABLE_LOAD_EXTENSION, 13).
 
 create_port_cmd(DbFile) ->
     atom_to_list(?DRIVER_NAME) ++ " " ++ DbFile.
@@ -1051,6 +1060,17 @@ exec(Port, {prepare, SQL}) ->
 exec(Port, {bind, Index, Params}) ->
     Bin = term_to_binary({Index, Params}),
     port_control(Port, ?PREPARED_BIND, Bin),
+    wait_result(Port);
+exec(Port, {enable_load_extension, Value}) ->
+    % Payload is 1 if enabling extension loading,
+    % 0 if disabling
+    Payload = case Value of 
+        true -> 1;
+        _ when is_integer(Value) -> Value;
+        false -> 0;
+        _ -> 0
+    end,
+    port_control(Port, ?ENABLE_LOAD_EXTENSION, <<Payload>>),
     wait_result(Port);
 exec(Port, {Cmd, Index}) when is_integer(Index) ->
     CmdCode = case Cmd of

@@ -4,6 +4,10 @@ This library allows you to work with SQLite3 databases from Erlang.
 
 It is compatible with Windows and Linux, and should probably work on other OSes as well.
 
+## Requirements
+
+Erlang/OTP R14B is required, and SQLite 3 minimum version is 3.6.1.
+
 ## Compiling
 
 ### Linux
